@@ -94,6 +94,11 @@ class CollectionTests(unittest.TestCase):
             self.assertNotIn("must-not-leak", json.dumps(images))
         native = list(docker.readers.values())
         self.assertEqual(sum("--with-files" in c for c in native), 2)
+        copies = [c for c in native if any("shutil.copyfile" in a for a in c)]
+        self.assertEqual(len(copies), 2)
+        self.assertTrue(
+            all(c[-2].startswith("sites/") and c[-1].endswith("site_config.json") for c in copies)
+        )
         self.assertTrue(any(QDRANT in c for c in native))
         self.assertTrue(all("sha256:fixed" in c and "none" in c for c in native))
         self.assertEqual(sum(any("pg_dump -U" in a for a in c) for c in docker.calls), 3)

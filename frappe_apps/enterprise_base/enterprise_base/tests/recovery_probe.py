@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 import frappe
-from frappe.installer import update_site_config
 from frappe.utils import add_days, today
+from frappe.utils.backups import get_or_generate_backup_encryption_key
 from frappe.utils.file_manager import save_file
 
 TYPES = ("Employee", "Designation", "Leave Application", "File")
@@ -14,7 +14,8 @@ WORK = Path(".eb-recovery")
 
 
 def guard(site):
-    if frappe.local.site != site or not frappe.conf.allow_tests:
+    sites = site if isinstance(site, tuple) else (site,)
+    if frappe.local.site not in sites or not frappe.conf.allow_tests:
         frappe.throw("仅允许指定的临时 CI 测试站点执行恢复演练。")
 
 
@@ -24,6 +25,8 @@ def digest(content):
 
 def seed():
     guard("contract.local")
+    # 先生成密钥，使两轮备份的配置都包含它；首轮附件仍为明文。
+    get_or_generate_backup_encryption_key()
     WORK.mkdir(mode=0o700)  # 已存在则失败，不复用上次演练的数据。
     data = json.loads(Path(__file__).with_name("p2_data.json").read_text())
     for row in data["records"]:
@@ -91,20 +94,14 @@ def seed():
     path.chmod(0o600)
 
 
-def configure_target():
-    guard("recovery.local")
+def verify():
+    guard(("recovery.local", "recovery-enc.local"))
     original = json.loads((WORK / "site_config.json").read_text())
     assert frappe.conf.db_name != original["db_name"]
-    # 只恢复解密用的密钥，绝不覆盖新站点自己的数据库名、密码和连接地址。
-    for key in ("encryption_key", "backup_encryption_key"):
-        if original.get(key):
-            update_site_config(key, original[key])
-    update_site_config("host_name", "http://recovery.local")
-    update_site_config("pause_scheduler", 1)
-
-
-def verify():
-    guard("recovery.local")
+    assert frappe.conf.db_password != original["db_password"]
+    assert frappe.conf.pause_scheduler and frappe.conf.mute_emails
+    assert frappe.conf.eb_wecom_cards == {"enabled": False}
+    assert frappe.conf.backup_encryption_key == original["backup_encryption_key"]
     state = json.loads((WORK / "state.json").read_text())
     assert {dt: frappe.db.count(dt) for dt in TYPES} == state["counts"]
     for dt, name in state["anchors"].items():

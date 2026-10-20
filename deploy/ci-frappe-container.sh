@@ -56,20 +56,23 @@ umask 077
 recovery_root=/home/frappe/frappe-bench/sites/.eb-recovery
 recovery_started=$SECONDS
 bench --site contract.local execute enterprise_base.tests.recovery_probe.seed
-bench --site contract.local backup --with-files --ignore-backup-conf --backup-path "$recovery_root" \
-  --backup-path-db "$recovery_root/database.sql.gz" --backup-path-files "$recovery_root/files.tar" \
-  --backup-path-private-files "$recovery_root/private-files.tar" --backup-path-conf "$recovery_root/site_config.json"
-# new-site 已存在时会失败；--force 只用于随即创建的空站点，不接触原两个测试站点。
-bench new-site recovery.local --db-root-password "$EB_TEST_PASSWORD" \
-  --admin-password "$EB_TEST_PASSWORD" --mariadb-user-host-login-scope '%'
-bench --site recovery.local set-config allow_tests true
-bench --site recovery.local restore "$recovery_root/database.sql.gz" --force \
-  --db-root-password "$EB_TEST_PASSWORD" --admin-password "$EB_TEST_PASSWORD" --with-public-files "$recovery_root/files.tar" \
-  --with-private-files "$recovery_root/private-files.tar"
-bench --site recovery.local execute enterprise_base.tests.recovery_probe.configure_target
-bench --site recovery.local migrate
-bench --site recovery.local execute enterprise_base.tests.recovery_probe.verify
-bench --site recovery.local execute enterprise_base.tests.probe.verify_http_contract
+for site in recovery.local recovery-enc.local; do
+  if test "$site" = recovery-enc.local; then
+    bench --site contract.local execute frappe.db.set_single_value --args '["System Settings","encrypt_backup",1]'
+    bench --site contract.local execute frappe.installer.update_site_config --args '["backup_encryption_key","None"]'
+  fi
+  bench --site contract.local backup --with-files --ignore-backup-conf --backup-path "$recovery_root" \
+    --backup-path-db "$recovery_root/database.sql.gz" --backup-path-files "$recovery_root/files.tar" \
+    --backup-path-private-files "$recovery_root/private-files.tar" --backup-path-conf "$recovery_root/site_config.json"
+  # 与收集程序一致，取回首次加密备份完成后才生成的密钥。
+  cp sites/contract.local/site_config.json "$recovery_root/site_config.json"
+  # 原生 CI 直接调用实际恢复程序，不另外复制解密密钥以免掩盖程序缺陷。
+  EB_RESTORE_DB_ROOT_PASSWORD="$EB_TEST_PASSWORD" EB_RESTORE_ADMIN_PASSWORD="$EB_TEST_PASSWORD" \
+    ./env/bin/python /workspace/deploy/restore_frappe.py "$site" "$recovery_root"
+  bench --site "$site" set-config allow_tests true
+  bench --site "$site" execute enterprise_base.tests.recovery_probe.verify
+  bench --site "$site" execute enterprise_base.tests.probe.verify_http_contract
+done
 rm -rf "$recovery_root"
 echo "Frappe 恢复演练耗时：$((SECONDS - recovery_started)) 秒（含合成数据准备、备份、建空站、恢复、迁移和核对）。"
 echo '真实 Frappe 测试、配置导出及第二空站点导入完成。'

@@ -265,6 +265,17 @@ class Collector:
                     args += ["--backup-path-" + flag, base + "/" + filename]
                 program = "import os,sys;os.umask(0o077);os.execvp('bench',['bench',*sys.argv[1:]])"
                 self.reader("-hr", "backend", ["-c", program, *args])
+                # 首次原生加密备份可能在备份配置后才生成密钥，重新取最新配置。
+                self.reader(
+                    "-hr",
+                    "backend",
+                    [
+                        "-c",
+                        "import shutil,sys;shutil.copyfile(sys.argv[1],sys.argv[2])",
+                        "sites/" + site + "/site_config.json",
+                        base + "/site_config.json",
+                    ],
+                )
             (folder / "sites.json").write_text(json.dumps(sites))
             (folder / "sites.json").chmod(0o600)
             self.payload(
